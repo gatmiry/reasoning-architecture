@@ -27,16 +27,17 @@ def test_x1x2x3x4x5_function():
     
     # Configuration
     function_dim = 8
-    num_zero_tokens = 2
+    num_zero_tokens = 5
     vocab_size = 4  # -1, 0, output, +1
     block_size = function_dim + num_zero_tokens + 1  # function_dim input tokens + zero tokens + 1 output token
     n_layers = 2
     n_heads = 1
     n_embd = 64
     dropout = 0.1
-    batch_size = 64
+    batch_size = 1024
     learning_rate = 1e-3
-    max_steps = 1
+    max_steps = 100000
+    threshold = 0.1
     
     print(f"Configuration:")
     print(f"  Function Dimension: {function_dim}")
@@ -85,27 +86,40 @@ def test_x1x2x3x4x5_function():
         # Compute target function: x₁x₂ (only first two variables)
         # Convert 0,1 to -1,+1 for target computation
         input_values = input_tokens * 2 - 1  # Convert to -1 or +1
-        target_values = (input_values[:, 0] * input_values[:, 1]).unsqueeze(1).float()
+        target_values = (input_values[:, 0] * input_values[:, 1] * input_values[:, 2]).unsqueeze(1).float()
         
         # Forward pass
-        predictions = predictor(input_tokens)
+        predictions = predictor(input_tokens, injection_sequence=predictor.injection_specifications)
         
         # Compute loss
         loss = F.mse_loss(predictions, target_values)
-        
+        #def is_connected(loss, x):
+        #   # loss can be scalar or tensor; if tensor, you may need grad_outputs (see below)
+        #   (g,) = torch.autograd.grad(
+        #       loss, x, retain_graph=True, allow_unused=True)
+        #   return g is not None
+        #print('is_connected(loss, predictor.transformer.transformer.wte.weight) is ', is_connected(loss, predictor.transformer.transformer.wte.weight))
+        #print('is_connected(loss, predictor.transformer.hidden_states[layer_0]) is ', is_connected(loss, predictor.transformer.hidden_states['layer_0']))
+        #print('grad of hidden states layer 0 is ', predictor.transformer.hidden_states['layer_0'].grad)
         # Backward pass
         optimizer.zero_grad()
-        loss.backward(retain_graph=True)  # Retain graph for gradient analysis
+        #print('grad of hidden states layer 0 is second time ', predictor.transformer.hidden_states['layer_0'].grad)
+        loss.backward()  # Retain graph for gradient analysis
         optimizer.step()
         
         # Analyze gradients and potentially add injection specifications
         # Pass the predictions from the main training loop to avoid recomputation
-        predictor.analyze_gradients_and_add_injections(input_tokens, target_values, predictions)
+        
+        #input_tokens = torch.randint(0, 2, (batch_size, function_dim), device=device)
+        #input_values = input_tokens * 2 - 1  # Convert to -1 or +1
+        #target_values = (input_values[:, 0] * input_values[:, 1] * input_values[:, 2] * input_values[:, 3] * input_values[:, 4]).unsqueeze(1).float()
+        
         
         
         
         # Print progress every 100 steps
         if step % 100 == 0 or step == max_steps - 1:
+            predictor.analyze_gradients_and_add_injections(input_tokens, target_values, threshold)
             print(f"Step {step:4d}: Loss = {loss.item():.6f}, Injections: {len(predictor.injection_specifications)}")
             
             # Show some example predictions vs targets

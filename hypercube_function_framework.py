@@ -35,7 +35,7 @@ class HypercubeFunctionPredictor(nn.Module):
         
         # Gradient-based injection specification tracking
         self.injection_specifications = []
-        self.gradient_threshold = 0.1  # Threshold for adding injection specifications
+        self.gradient_threshold = 0.8  # Threshold for adding injection specifications
         self.zero_position_counter = function_dim  # Counter for zero token positions
         
         # Initialize weights
@@ -75,27 +75,22 @@ class HypercubeFunctionPredictor(nn.Module):
         token_indices = torch.cat([token_indices, output_tokens], dim=1)
         
         if injection_sequence is None:
+            print("no injection sequence, doing standard forward pass")
             # Standard forward pass
-            logits, _ = self.transformer(token_indices)
+            _, _, hidden_states = self.transformer(token_indices, return_hidden_states=True)
+            last_layer_hidden = hidden_states[f'layer_{self.config.n_layers}']
         else:
             # Forward pass with sequential injections
             reasoning_framework = SequentialInjectionReasoningFramework(self.transformer, self.config)
-            reasoning_framework.set_extraction_layers([self.config.n_layers - 1])  # Extract from last layer
             
             results = reasoning_framework.perform_sequential_injections(
                 token_indices, injection_sequence
             )
-            logits = results[-1]['logits']
+            last_layer_hidden = results[-1]['hidden_states'][f'layer_{self.config.n_layers}']
+            #print('length of results is ', len(results))
         
         # Get hidden states from the last layer for the last token
-        if injection_sequence is None or True:
-            # Standard forward pass to get hidden states
-            print('im here!!!!!!!!!')
-            _, _, hidden_states = self.transformer(token_indices, return_hidden_states=True)
-            last_layer_hidden = hidden_states[f'layer_{self.config.n_layers - 1}']
-        else:
-            # Use hidden states from sequential injection results
-            last_layer_hidden = results[-1]['hidden_states'][f'layer_{self.config.n_layers - 1}']
+        
         
         # Extract output token's hidden state (at position function_dim + num_zero_tokens)
         output_token_position = self.function_dim + self.num_zero_tokens
@@ -146,62 +141,47 @@ class HypercubeFunctionPredictor(nn.Module):
         # Check the current zero token position using counter
         zero_position = self.zero_position_counter
         
-        # Enable hidden state extraction for gradient analysis
-        self.transformer.enable_hidden_extraction(list(range(self.config.n_layers)))
+        # Hidden states are always extracted automatically
         
         # Forward pass to get predictions and enable gradient tracking
-        print("about to forward pass in analyze grad")
         predictions = self.forward(input_tokens, injection_sequence=self.injection_specifications)
-        print("exiting forward pass in analyze grad")
-        # Retain gradients for the predictions tensor
-        if self.training:
-            predictions.retain_grad()
         
         # Compute loss (averaged across batch)
-        print("going into loss computation in analyze grad")
         loss = F.mse_loss(predictions, target_values.clone().detach())
-        def is_connected(loss, x):
-    # loss can be scalar or tensor; if tensor, you may need grad_outputs (see below)
-            (g,) = torch.autograd.grad(
-                loss, x, retain_graph=True, allow_unused=True)
-            return g is not None
-        print("is connected final hidden state", is_connected(loss, self.transformer.hidden_states['final']))
-        print("is connected predictions", is_connected(loss, predictions))
-        print("is connected wte", is_connected(loss, self.transformer.transformer.wte.weight))
-        print("is connected layer_0", is_connected(loss, self.transformer.hidden_states['layer_0']))
-        print("exiting loss computation in analyze grad")
+        
         # Backward pass to get gradients
-        print("about to backward pass")
-        print("hidden states final id is ", id(self.transformer.hidden_states['final']))
-        print("hidden states final grad is not none", self.transformer.hidden_states['final'].grad is not None)
         loss.backward()
-        print("exiting backward pass")
-        print("hidden states final grad is not none", self.transformer.hidden_states['final'].grad is not None)
-        # Get gradients directly from the transformer's internal hidden states
+        #print('predictor.transformer.transformer.wte.weight.grad is ', self.transformer.transformer.wte.weight.grad)
+        if len(self.injection_specifications) > 0:
+            position =self.injection_specifications[-1]['extraction']['position']
+            layer_name = self.injection_specifications[-1]['extraction']['layer_name']
+            #print('added layer name is ', layer_name, 'and position is ', position)
+            #print('predictor.transformer.hiddden_states[layer_0].grad in the added layer and position is ', self.transformer.hidden_states[layer_name].grad[0,position,:])
+            # Get gradients directly from the transformer's internal hidden states
         # We need to access the original tensors, not the cloned ones
-        if hasattr(self.transformer, 'hidden_states') and 'final' in self.transformer.hidden_states:
+        if hasattr(self.transformer, 'hidden_states') and 'layer_0' in self.transformer.hidden_states:
             # Use the final hidden state which is definitely part of the computation graph
-            final_hidden = self.transformer.hidden_states['final']
-            if final_hidden.grad is not None:
-                zero_token_grads = final_hidden.grad[:, zero_position, :]  # [batch, n_embd]
+            zero_hidden = self.transformer.hidden_states['layer_0']
+            if zero_hidden.grad is not None:
+                zero_token_grads = zero_hidden.grad[:, zero_position, :]  # [batch, n_embd]
+                #print('zero_token_grads major is ', zero_token_grads[:3, :])
             else:
-                print("DEBUG: No gradients found in final hidden state id is ", id(final_hidden))
-                print("predictions grad is not none", predictions.grad is not None)
+                print("DEBUG: No gradients found in layer_0 hidden state")
                 return self.injection_specifications
         else:
             print("DEBUG: No gradients found in predictions.grad")
             return self.injection_specifications
         
         # Compute dot products with all intermediate hidden embeddings using tensor operations
-        max_dot_product = 0
         best_token_idx = 0
         best_layer = 0
         best_dot_product_sign = 1
         
         # Check all layers - access from transformer's internal hidden states
-        for layer_idx in range(self.config.n_layers):
+        max_cosine_similarity = 0
+        for layer_idx in range(1, self.config.n_layers):
             if f'layer_{layer_idx}' in self.transformer.hidden_states:
-                layer_hidden = self.transformer.hidden_states[f'layer_{layer_idx}']  # [batch, seq_len, n_embd]
+                layer_hidden = self.transformer.hidden_states[f'layer_{layer_idx}'].clone().detach()  # [batch, seq_len, n_embd]
                 
                 # Check all hypercube bit tokens (intermediate tokens)
                 for token_idx in range(self.function_dim):
@@ -210,24 +190,31 @@ class HypercubeFunctionPredictor(nn.Module):
                     
                     # Compute dot products per sample using tensor operations
                     # zero_token_grads: [batch, n_embd], token_hidden: [batch, n_embd]
+                    #print('zero_token_grads is ', zero_token_grads[:3, :], 'token_hidden is ', token_hidden[:3, :])
                     dot_products = torch.sum(zero_token_grads * token_hidden, dim=1)  # [batch]
-                    
-                    # Scale up by batch size and compute average
-                    scaled_dot_product_abs = torch.mean(torch.abs(dot_products)).item() * batch_size
+                    average_norm_zero_token_grads = torch.mean(torch.norm(zero_token_grads, dim=1))
+                    average_norm_token_hidden = torch.mean(torch.norm(token_hidden, dim=1))
                     scaled_dot_product_sign = torch.sign(torch.mean(dot_products)).item()
+                    if average_norm_zero_token_grads > 0 and average_norm_token_hidden > 0:
+                        cosine_similarity = torch.mean(dot_products) / (average_norm_zero_token_grads * average_norm_token_hidden)
+                        #print('cosine_similarity is ', cosine_similarity)
+                        if cosine_similarity * scaled_dot_product_sign > max_cosine_similarity:
+                            max_cosine_similarity = cosine_similarity * scaled_dot_product_sign
+                            best_token_idx = token_idx
+                            best_layer = layer_idx
+                            best_dot_product_sign = scaled_dot_product_sign
                     
-                    if scaled_dot_product_abs > max_dot_product:
-                        max_dot_product = scaled_dot_product_abs
-                        best_token_idx = token_idx
-                        best_layer = layer_idx
-                        best_dot_product_sign = scaled_dot_product_sign
+                    
+                   
         
         # If dot product is above threshold, add injection specification
-        if max_dot_product > threshold:
+        print('max_cosine_similarity is ', max_cosine_similarity, 'threshold is ', threshold)
+        if max_cosine_similarity > threshold:
+            #assert len(self.injection_specifications) == 1, 'injection specifications should be empty'
             # Determine the injection weight with correct sign
             # If gradient dot product is positive, inject negative of hidden embedding
             # If gradient dot product is negative, inject positive of hidden embedding
-            base_weight = min(1.0, max_dot_product / threshold)
+            base_weight = min(1.0, max_cosine_similarity / threshold)
             injection_weight = -base_weight if best_dot_product_sign > 0 else base_weight
             
             injection_spec = {
@@ -238,7 +225,7 @@ class HypercubeFunctionPredictor(nn.Module):
                     'position': best_token_idx
                 },
                 'injection': {
-                    'layer': 0,
+                    'layer': 0,  # This corresponds to layer_0 (token_embd + position_embd)
                     'position': zero_position,
                     'method': 'add',
                     'weight': injection_weight  # Weight with correct sign based on gradient direction
@@ -247,9 +234,10 @@ class HypercubeFunctionPredictor(nn.Module):
             
             # Add to specifications if not already present
             if injection_spec not in self.injection_specifications:
+                print('adding injection specification inside iffff')
                 self.injection_specifications.append(injection_spec)
                 print(f"Added injection specification for zero token at position {zero_position}: "
-                      f"dot_product={max_dot_product:.4f} (sign={best_dot_product_sign:+.0f}), "
+                      f"dot_product={max_cosine_similarity:.4f} (sign={best_dot_product_sign:+.0f}), "
                       f"from_token={best_token_idx}_layer={best_layer} to_position={zero_position}, "
                       f"weight={injection_weight:.4f}")
                 
@@ -437,6 +425,9 @@ def create_injection_sequence_for_function(function_dim: int,
                                          function_name: str) -> List[Dict]:
     """
     Create a sequential injection sequence tailored for specific functions.
+    Note: layer 0 = initial embeddings (token_embd + position_embd)
+          layer 1 = output of first transformer block
+          layer 2 = output of second transformer block, etc.
     """
     if function_name == "linear":
         # For linear functions, inject information from early layers to later layers

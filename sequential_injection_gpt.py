@@ -62,17 +62,6 @@ class SequentialInjectionGPT(nn.Module):
         if isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0, std=std)
     
-    def enable_hidden_extraction(self, target_layers: List[int]):
-        """Enable extraction of hidden states from specified layers."""
-        self.extract_hidden = True
-        self.target_layers = target_layers
-        self.hidden_states = {}
-    
-    def disable_hidden_extraction(self):
-        """Disable hidden state extraction."""
-        self.extract_hidden = False
-        self.target_layers = []
-        self.hidden_states = {}
     
     def get_injection_projection(self, injection_key: str, input_dim: int, output_dim: int):
         """Get or create projection layer for injection."""
@@ -84,10 +73,9 @@ class SequentialInjectionGPT(nn.Module):
         """
         Standard forward pass with optional hidden state extraction.
         """
-        print("DEBUG: Entered SequentialInjectionGPT.forward()")
-        print(f"DEBUG: idx shape: {idx.shape}")
-        print(f"DEBUG: return_hidden_states: {return_hidden_states}")
-        print(f"DEBUG: extract_hidden: {self.extract_hidden}")
+        #print("DEBUG: Entered SequentialInjectionGPT.forward()")
+        #print(f"DEBUG: idx shape: {idx.shape}")
+        #print(f"DEBUG: return_hidden_states: {return_hidden_states}")
         
         B, T = idx.size()
         pe = torch.arange(0, T, dtype=torch.long, device=idx.device)
@@ -95,40 +83,37 @@ class SequentialInjectionGPT(nn.Module):
         x = pe_vecs + self.transformer.wte(idx)
         
         # Store initial embeddings as layer_0
-        if self.extract_hidden or return_hidden_states:
+        if return_hidden_states:
             hidden_states = {}
-            if self.extract_hidden:
-                self.hidden_states['layer_0'] = x
-                if self.training:
-                    x.retain_grad()  # Retain gradients for this tensor
-            if return_hidden_states:
-                hidden_states['layer_0'] = x
+            hidden_states['layer_0'] = x
+        
+        # Always store layer_0 in hidden_states
+        self.hidden_states['layer_0'] = x
+        if self.training:
+            #print('im retaining gradients for x layer_0')
+            x.retain_grad()  # Retain gradients for this tensor
         
         # Forward through transformer blocks
         for layer_idx, block in enumerate(self.transformer.h):
             x = block(x)
             
-            # Store hidden states from target layers (layer_idx+1 because layer_0 is initial embeddings)
-            if (self.extract_hidden and (layer_idx + 1) in self.target_layers) or return_hidden_states:
-                if self.extract_hidden:
-                    self.hidden_states[f'layer_{layer_idx + 1}'] = x
-                    if self.training:
-                        x.retain_grad()  # Retain gradients for this tensor
-                if return_hidden_states:
-                    hidden_states[f'layer_{layer_idx + 1}'] = x
+            # Always store hidden states from all layers
+            self.hidden_states[f'layer_{layer_idx + 1}'] = x
+            if self.training:
+                x.retain_grad()  # Retain gradients for this tensor
+            
+            if return_hidden_states:
+                hidden_states[f'layer_{layer_idx + 1}'] = x
         
         # Final layer norm
         x = self.transformer.ln_f(x)
         
         # Store final hidden states BEFORE computing logits
-        print('im here before final hidden states x id is ', id(x))
-        if self.extract_hidden:
-            print('DEBUG: Storing final hidden states')
-            self.hidden_states['final'] = x
-            if self.training:
-                print('DEBUG: Retaining gradients for final hidden states')
-                x.retain_grad()  # Retain gradients for this tensor
-                print('final hidden states x grad is not none', x.grad is not None)
+        # Always store final hidden states
+        self.hidden_states['final'] = x
+        if self.training:
+            x.retain_grad()  # Retain gradients for this tensor
+        
         if return_hidden_states:
             hidden_states['final'] = x
         
@@ -146,7 +131,8 @@ class SequentialInjectionGPT(nn.Module):
     
     def forward_with_single_injection(self, input_ids: torch.Tensor,
                                     hidden_embedding: torch.Tensor,
-                                    injection_spec: Dict) -> Tuple[torch.Tensor, None]:
+                                    injection_spec: Dict, 
+                                    return_hidden_states: bool = False) -> Tuple[torch.Tensor, None, Optional[Dict]]:
         """
         Perform a single forward pass with one hidden embedding injection.
         
@@ -154,29 +140,49 @@ class SequentialInjectionGPT(nn.Module):
             input_ids: Input token indices
             hidden_embedding: Hidden embedding to inject [batch, hidden_dim]
             injection_spec: Injection specification dict
+            return_hidden_states: Whether to return hidden states
         
         Returns:
             logits: Output logits
             loss: Loss (None in this case)
+            hidden_states: Hidden states if return_hidden_states=True, else None
         """
         B, T = input_ids.size()
-        pe = torch.arange(0, T, dtype=torch.long, device=input_ids.device)
-        pe_vecs = self.transformer.wpe(pe)
-        x = pe_vecs + self.transformer.wte(input_ids)
+        #pe = torch.arange(0, T, dtype=torch.long, device=input_ids.device)
+        #pe_vecs = self.transformer.wpe(pe)
+        #x = pe_vecs + self.transformer.wte(input_ids)
+        x = self.hidden_states['layer_0']
+        # Store hidden states if requested
+        hidden_states = {} if return_hidden_states else None
+        if return_hidden_states:
+            hidden_states['layer_0'] = x
+        
+        # Apply injection at layer_0 (initial embeddings) if specified
+        if injection_spec['layer'] == 0:
+            x = self._apply_single_injection(x, hidden_embedding, injection_spec)
+            if return_hidden_states:
+                hidden_states['layer_0'] = x
         
         # Forward through transformer blocks with single injection
         for layer_idx, block in enumerate(self.transformer.h):
-            # Apply injection before this layer if specified
-            if injection_spec['layer'] == layer_idx:
+            # Apply injection before this layer if specified (layer_idx+1 because layer_0 is initial embeddings)
+            if injection_spec['layer'] == layer_idx + 1:
                 x = self._apply_single_injection(x, hidden_embedding, injection_spec)
             
             x = block(x)
+            
+            # Store hidden states if requested
+            if return_hidden_states:
+                hidden_states[f'layer_{layer_idx + 1}'] = x
         
         # Final layer norm and output
         x = self.transformer.ln_f(x)
+        if return_hidden_states:
+            hidden_states['final'] = x
+        
         logits = self.lm_head(x)
         
-        return logits, None
+        return logits, None, hidden_states
     
     def _apply_single_injection(self, x: torch.Tensor, hidden_embedding: torch.Tensor, 
                                spec: Dict) -> torch.Tensor:
@@ -191,9 +197,13 @@ class SequentialInjectionGPT(nn.Module):
         Returns:
             Modified hidden state tensor
         """
+
+        x = x.clone()
+
         position = spec['position']
         method = spec.get('method', 'add')
         weight = spec.get('weight', 1.0)
+        
         
         # Ensure position is within bounds
         if position >= x.size(1):
@@ -276,18 +286,10 @@ class SequentialInjectionReasoningFramework:
         self.model = model
         self.config = config
         self.reasoning_history = []
-        self.extraction_layers = []
     
-    def set_extraction_layers(self, layers: List[int]):
-        """Set which layers to extract hidden states from."""
-        self.extraction_layers = layers
-        self.model.enable_hidden_extraction(layers)
     
     def perform_initial_pass(self, input_ids: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         """Perform the initial forward pass and extract hidden states."""
-        if self.extraction_layers:
-            self.model.enable_hidden_extraction(self.extraction_layers)
-        
         logits, loss, hidden_states = self.model(
             input_ids, 
             return_hidden_states=True
@@ -322,6 +324,7 @@ class SequentialInjectionReasoningFramework:
         results = []
         
         # Initial pass
+        #print('performing initial pass')
         logits, hidden_states = self.perform_initial_pass(input_ids)
         results.append({
             'step': 0,
@@ -332,7 +335,12 @@ class SequentialInjectionReasoningFramework:
         })
         
         # Sequential injections
+        
         for i, injection_spec in enumerate(injection_sequence):
+            extraction_spec = injection_spec['extraction']
+            layer_name = extraction_spec['layer_name']
+            position = extraction_spec['position']
+            #print(f'performing injection {i+1} of {len(injection_sequence)}, from layer {layer_name} at position {position}')
             # Extract hidden embedding for this injection
             extraction_spec = injection_spec['extraction']
             ## there is no dependecy of extract_hidden_embeddings function on the model
@@ -345,17 +353,12 @@ class SequentialInjectionReasoningFramework:
             hidden_embedding = hidden_embeddings[extraction_spec['key']]
             
             # Perform forward pass with single injection
-            logits, _ = self.model.forward_with_single_injection(
-                input_ids, hidden_embedding, injection_config
+            logits, _, new_hidden_states = self.model.forward_with_single_injection(
+                input_ids, hidden_embedding, injection_config, return_hidden_states=True
             )
             
-            # Extract new hidden states for next iteration
-            if self.extraction_layers:
-                self.model.enable_hidden_extraction(self.extraction_layers)
-                _, _, new_hidden_states = self.model(
-                    input_ids, 
-                    return_hidden_states=True
-                )
+            # Use hidden states from the injection result
+            if new_hidden_states is not None:
                 hidden_states = new_hidden_states
             
             # Store in reasoning history
@@ -375,6 +378,8 @@ class SequentialInjectionReasoningFramework:
                 'hidden_states': hidden_states,
                 'injection_spec': injection_spec
             })
+
+        #print('length of results inside perform_sequential_injections is ', len(results))
         
         return results
     
