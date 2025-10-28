@@ -38,6 +38,10 @@ class HypercubeFunctionPredictor(nn.Module):
         self.gradient_threshold = 0.8  # Threshold for adding injection specifications
         self.zero_position_counter = function_dim  # Counter for zero token positions
         
+        # Learnable base weight for injection specifications, initialized close to zero
+        self.base_weight = torch.tensor(1.0)  # Small initialization
+        self.learnable_weights = nn.ParameterList([nn.Parameter(self.base_weight.clone()) for _ in range(self.num_zero_tokens)])  # Store learnable weights for each injection
+        
         # Initialize weights
         self.apply(self._init_weights)
     
@@ -214,8 +218,12 @@ class HypercubeFunctionPredictor(nn.Module):
             # Determine the injection weight with correct sign
             # If gradient dot product is positive, inject negative of hidden embedding
             # If gradient dot product is negative, inject positive of hidden embedding
+            # Use learnable base_weight parameter instead of computed value
             base_weight = min(1.0, max_cosine_similarity / threshold)
             injection_weight = -base_weight if best_dot_product_sign > 0 else base_weight
+            with torch.no_grad():
+                self.learnable_weights[zero_position - self.function_dim].mul_(injection_weight)
+            
             
             injection_spec = {
                 'extraction': {
@@ -228,7 +236,7 @@ class HypercubeFunctionPredictor(nn.Module):
                     'layer': 0,  # This corresponds to layer_0 (token_embd + position_embd)
                     'position': zero_position,
                     'method': 'add',
-                    'weight': injection_weight  # Weight with correct sign based on gradient direction
+                    'weight': self.learnable_weights[zero_position - self.function_dim]  # Weight with correct sign based on gradient direction
                 }
             }
             

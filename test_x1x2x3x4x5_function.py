@@ -19,7 +19,7 @@ def test_x1x2x3x4x5_function():
     print("=" * 80)
     
     # Set random seed for reproducibility
-    torch.manual_seed(42)
+    torch.manual_seed(41)
     
     # Check if CUDA is available
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -27,17 +27,17 @@ def test_x1x2x3x4x5_function():
     
     # Configuration
     function_dim = 8
-    num_zero_tokens = 5
+    num_zero_tokens = 9
     vocab_size = 4  # -1, 0, output, +1
     block_size = function_dim + num_zero_tokens + 1  # function_dim input tokens + zero tokens + 1 output token
     n_layers = 2
     n_heads = 1
     n_embd = 64
     dropout = 0.1
-    batch_size = 1024
-    learning_rate = 1e-3
+    batch_size = 256
+    learning_rate = 1e-4
     max_steps = 100000
-    threshold = 0.1
+    threshold = 0.02
     
     print(f"Configuration:")
     print(f"  Function Dimension: {function_dim}")
@@ -86,7 +86,7 @@ def test_x1x2x3x4x5_function():
         # Compute target function: x₁x₂ (only first two variables)
         # Convert 0,1 to -1,+1 for target computation
         input_values = input_tokens * 2 - 1  # Convert to -1 or +1
-        target_values = (input_values[:, 0] * input_values[:, 1] * input_values[:, 2]).unsqueeze(1).float()
+        target_values = (input_values[:, 0] * input_values[:, 1] * input_values[:, 2] * input_values[:, 3] * input_values[:, 4] * input_values[:, 5] * input_values[:, 6] * input_values[:, 7]).unsqueeze(1).float()
         
         # Forward pass
         predictions = predictor(input_tokens, injection_sequence=predictor.injection_specifications)
