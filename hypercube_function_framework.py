@@ -39,7 +39,7 @@ class HypercubeFunctionPredictor(nn.Module):
         self.zero_position_counter = function_dim  # Counter for zero token positions
         
         # Learnable base weight for injection specifications, initialized close to zero
-        self.base_weight = torch.tensor(1.0)  # Small initialization
+        self.base_weight = torch.tensor(0.1)  # Small initialization
         self.learnable_weights = nn.ParameterList([nn.Parameter(self.base_weight.clone()) for _ in range(self.num_zero_tokens)])  # Store learnable weights for each injection
         
         # Initialize weights
@@ -188,7 +188,7 @@ class HypercubeFunctionPredictor(nn.Module):
                 layer_hidden = self.transformer.hidden_states[f'layer_{layer_idx}'].clone().detach()  # [batch, seq_len, n_embd]
                 
                 # Check all hypercube bit tokens (intermediate tokens)
-                for token_idx in range(self.function_dim):
+                for token_idx in range(self.function_dim + self.num_zero_tokens + 1):
                     # Get hidden embedding for this token at this layer
                     token_hidden = layer_hidden[:, token_idx, :]  # [batch, n_embd]
                     
