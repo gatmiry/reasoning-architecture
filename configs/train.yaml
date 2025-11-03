@@ -1,0 +1,11 @@
+function_dim: 32
+num_zero_tokens: 10
+vocab_size: 4
+n_layers: 2
+n_heads: 1
+n_embd: 64
+dropout: 0.1
+batch_size: 512
+learning_rate: 1e-4
+max_steps: 100000
+threshold: 0.03

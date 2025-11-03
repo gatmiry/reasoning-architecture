@@ -1,0 +1,4 @@
+{
+    "experiment_name": "train on 12bit input no injections",
+    "bash": "python train.py threshold=0.99",
+}
