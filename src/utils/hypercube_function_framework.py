@@ -12,8 +12,8 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import List, Dict, Tuple, Callable, Optional
-from model import GPTConfig
-from sequential_injection_gpt import SequentialInjectionGPT, SequentialInjectionReasoningFramework
+from src.utils.model import GPTConfig
+from src.utils.sequential_injection_gpt import SequentialInjectionGPT, SequentialInjectionReasoningFramework
 
 class HypercubeFunctionPredictor(nn.Module):
     """

@@ -1,0 +1,8 @@
+{
+    "experiment_name": "train on 12bit input no injections",
+    "bash": "python train.py threshold=0.99 function_dim=12",
+}
+{
+    "experiment_name": "train on 12bit input with injections",
+    "bash": "python train.py threshold=0.02 function_dim=12 num_zero_tokens=30",
+}
