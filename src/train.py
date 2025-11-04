@@ -1,9 +1,8 @@
 from typing import Any, Dict, List, Optional, Tuple
-
+import wandb
 import hydra
 import rootutils
-from omegaconf import DictConfig
-
+from omegaconf import DictConfig, OmegaConf
 
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
@@ -23,9 +22,11 @@ rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 #
 # more info: https://github.com/ashleve/rootutils
 # ------------------------------------------------------------------------------------ #
-from test_x1x2x3x4x5_function import test_x1x2x3x4x5_function
+from src.utils import hydra_custom_resolvers
 
-@hydra.main(version_base="1.3", config_path="./configs", config_name="train.yaml")
+
+
+@hydra.main(version_base="1.3", config_path="../configs", config_name="train.yaml")
 def main(cfg: DictConfig) -> Optional[float]:
     """Main entry point for training.
 
@@ -39,10 +40,16 @@ def main(cfg: DictConfig) -> Optional[float]:
         print("Waiting for debugger to attach...")
         debugpy.wait_for_client()
 
+    # print config:
+    print(OmegaConf.to_yaml(cfg, resolve=True))
 
     # train the model
-    test_x1x2x3x4x5_function(cfg)
-
+    wandb.init(
+            config=OmegaConf.to_container(cfg),
+            **OmegaConf.to_container(cfg.wandb_config, resolve=True)
+        )
+    train=hydra.utils.instantiate(cfg.trainer)
+    train.fit()
 
 
 if __name__ == "__main__":

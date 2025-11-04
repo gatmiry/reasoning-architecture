@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 from typing import List, Dict, Optional, Tuple, Union
-from model import MLP, CasualSelfAttention, Block, GPTConfig
+from src.utils.model import MLP, CasualSelfAttention, Block, GPTConfig
 
 class SequentialInjectionGPT(nn.Module):
     """
