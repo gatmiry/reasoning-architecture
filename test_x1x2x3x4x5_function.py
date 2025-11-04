@@ -37,7 +37,7 @@ def test_x1x2x3x4x5_function():
     batch_size = 1024
     learning_rate = 1e-4
     max_steps = 100000
-    threshold = 0.03
+    threshold = 0.1
     
     print(f"Configuration:")
     print(f"  Function Dimension: {function_dim}")
@@ -86,6 +86,7 @@ def test_x1x2x3x4x5_function():
         # Compute target function: x₁x₂ (only first two variables)
         # Convert 0,1 to -1,+1 for target computation
         input_values = input_tokens * 2 - 1  # Convert to -1 or +1
+        input_values_2 = -input_tokens + 2
         target_values = (input_values[:, 0] * input_values[:, 1] * input_values[:, 2] * input_values[:, 3] * input_values[:, 4] * input_values[:, 5] * input_values[:, 6]).unsqueeze(1).float()
         
         # Forward pass

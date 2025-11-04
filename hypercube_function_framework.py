@@ -213,7 +213,7 @@ class HypercubeFunctionPredictor(nn.Module):
         
         # If dot product is above threshold, add injection specification
         print('max_cosine_similarity is ', max_cosine_similarity, 'threshold is ', threshold)
-        if max_cosine_similarity > threshold:
+        if max_cosine_similarity > threshold and len(self.injection_specifications) < self.num_zero_tokens:
             #assert len(self.injection_specifications) == 1, 'injection specifications should be empty'
             # Determine the injection weight with correct sign
             # If gradient dot product is positive, inject negative of hidden embedding
