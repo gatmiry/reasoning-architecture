@@ -1,0 +1,2 @@
+{"experiment_name": "train on 12bit input no injections", "bash": "python src/train.py trainer.cfg.threshold=0.99 trainer.cfg.function_dim=12", "gpu": 0}
+{"experiment_name": "train on 12bit input with injections", "bash": "python src/train.py trainer.cfg.threshold=0.02 trainer.cfg.function_dim=12 trainer.cfg.num_zero_tokens=30", "gpu": 1}
